@@ -139,10 +139,21 @@ export interface GetTeamResponse {
 }
 
 export interface SubmitProjectPayload {
-  project_desc: string;
+  project_name: string;
+  problem_stmt: string;
   track: string;
   subtrack: string;
   github_link: string;
+  figma_link?: string;
+  other_files?: string;
+}
+
+export interface GetProjectResponse {
+  project_name?: string;
+  problem_stmt?: string;
+  track?: string;
+  subtrack?: string;
+  github_link?: string;
   figma_link?: string;
   other_files?: string;
 }
@@ -177,6 +188,10 @@ export const api = {
     fetchWithAuth<GetTeamResponse>("/teams/get", {
       method: "GET",
     }),
+  getProject: () =>
+  fetchWithAuth<GetProjectResponse>("/teams/project", {
+    method: "GET",
+  }),
 
   submitProject: (payload: SubmitProjectPayload) =>
     fetchWithAuth<SubmitProjectResponse>("/teams/project/submit", {

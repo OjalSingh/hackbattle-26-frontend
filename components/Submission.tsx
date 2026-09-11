@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState, useMemo } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 import { useToast } from "@/components/ToastProvider";
 import Link from "next/link";
@@ -37,6 +37,20 @@ const TRACK_SUBTRACKS_MAP: Record<string, string[]> = {
   ],
 };
 
+function isValidGithubUrl(value: string): boolean {
+  try {
+    const url = new URL(value.trim());
+
+    return (
+      (url.protocol === "https:" || url.protocol === "http:") &&
+      (url.hostname === "github.com" ||
+        url.hostname === "www.github.com")
+    );
+  } catch {
+    return false;
+  }
+}
+
 export default function Submission() {
   const [projectName, setProjectName] = useState("");
   const [description, setDescription] = useState("");
@@ -47,6 +61,7 @@ export default function Submission() {
   const [otherLinks, setOtherLinks] = useState("");
   const [submitted, setSubmitted] = useState(false);
   const { showToast } = useToast();
+  const [loadingProject, setLoadingProject] = useState(true);
 
   // Get dynamic subtrack options according to selected track
   const availableSubtracks = useMemo(() => {
@@ -59,51 +74,154 @@ export default function Submission() {
     setSubmitted(false);
   };
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  useEffect(() => {
+  const loadExistingSubmission = async () => {
+    setLoadingProject(true);
 
-    if (!description.trim() || !github.trim()) {
-      showToast("Project Description and GitHub Link are required.", "error");
+    try {
+      const { data, status } = await api.getTeam();
+
+      if (status === 200 && data) {
+        // These fields already exist in the current backend.
+        setDescription(data.problem_stmt || "");
+        setGithub(data.github_link || "");
+        setFigma(data.figma_link || "");
+        setOtherLinks(data.other_files || "");
+
+        // These are NOT currently returned by the old backend,
+        // so leave them for the user to enter manually.
+        setProjectName("");
+        setTrack("");
+        setSubtrack("");
+
+        // If at least one persisted submission field exists,
+        // consider the form to contain an existing submission.
+        const hasExistingSubmission =
+          Boolean(data.problem_stmt) ||
+          Boolean(data.github_link) ||
+          Boolean(data.figma_link) ||
+          Boolean(data.other_files);
+
+        setSubmitted(hasExistingSubmission);
+      } else if (status === 204 || status === 403 || status === 404) {
+        setSubmitted(false);
+      } else if (status === 401) {
+        toast({
+          title: "LOGIN REQUIRED",
+          description: "Please login to access your submission.",
+        });
+      }
+    } catch (error) {
+      console.error("Failed to load existing submission:", error);
+    } finally {
+      setLoadingProject(false);
+    }
+  };
+
+  loadExistingSubmission();
+}, [toast]);
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+  event.preventDefault();
+
+  const trimmedProjectName = projectName.trim();
+  const trimmedDescription = description.trim();
+  const trimmedGithub = github.trim();
+  const trimmedFigma = figma.trim();
+  const trimmedOtherLinks = otherLinks.trim();
+
+  if (!trimmedProjectName) {
+    showToast("Project Name is required.", "error");
+    return;
+  }
+
+  if (!trimmedDescription) {
+    showToast("Project Description is required.", "error");
+    return;
+  }
+
+  if (!track) {
+    showToast("Please select a Track.", "error");
+    return;
+  }
+
+  if (!subtrack) {
+    showToast("Please select a Subtrack.", "error");
+    return;
+  }
+
+  if (!trimmedGithub) {
+    showToast("GitHub Link is required.", "error");
+    return;
+  }
+
+  if (!isValidGithubUrl(trimmedGithub)) {
+    showToast("Please enter a valid GitHub link.", "error");
+    return;
+  }
+
+  try {
+    setSubmitted(false);
+
+    const { data, status } = await api.submitProject({
+  project_name: trimmedProjectName,
+  problem_stmt: trimmedDescription,
+  track: track.trim(),
+  subtrack: subtrack.trim(),
+  github_link: trimmedGithub,
+  figma_link: trimmedFigma,
+  other_files: trimmedOtherLinks,
+});
+
+    if (status === 200 || status === 201) {
+      setSubmitted(true);
+      showToast(
+        "Project submitted successfully!",
+        "success"
+      );
       return;
     }
 
-    try {
-      setSubmitted(false);
-
-      const { data, status } = await api.submitProject({
-        project_desc: description.trim(),
-        track: track.trim(),
-        subtrack: subtrack.trim(),
-        github_link: github.trim(),
-        figma_link: figma.trim(),
-        other_files: otherLinks.trim(),
-      });
-
-      if (status === 200 || status === 201) {
-        setSubmitted(true);
-        showToast("Project submitted successfully!", "success");
-        return;
-      }
-
-      if (status === 401) {
-        showToast("Please log in before submitting.", "error");
-        return;
-      }
-
-      throw new Error(
-        data?.message || `Submission failed (${status})`
-      );
-    } catch (error) {
-      console.error("Submission error:", error);
-
+    if (status === 400) {
       showToast(
-        error instanceof Error
-          ? error.message
-          : "Failed to submit project. Please try again.",
+        data?.message || "Please check your submission details.",
         "error"
       );
+      return;
     }
+
+    if (status === 401) {
+      showToast("Please log in before submitting.", "error");
+      return;
+    }
+
+    if (status === 403) {
+      showToast(
+        "Only the team leader can submit the project.",
+        "error"
+      );
+      return;
+    }
+
+    if (status === 404) {
+      showToast("Team not found.", "error");
+      return;
+    }
+
+    throw new Error(
+      data?.message || `Submission failed (${status})`
+    );
+  } catch (error) {
+    console.error("Submission error:", error);
+
+    showToast(
+      error instanceof Error
+        ? error.message
+        : "Failed to submit project. Please try again.",
+      "error"
+    );
   }
+}
 
   return (
     <main className="w-full min-h-screen bg-black p-0">
@@ -290,6 +408,8 @@ export default function Submission() {
             <input
               id="project-name"
               value={projectName}
+              required
+              maxLength={100}
               onChange={(e) => {
                 setProjectName(e.target.value);
                 setSubmitted(false);
@@ -410,6 +530,7 @@ export default function Submission() {
             <select
               id="track"
               value={track}
+              required
               onChange={(e) => handleTrackChange(e.target.value)}
               className="
                 mt-[1%]
@@ -473,6 +594,7 @@ export default function Submission() {
 
             <select
               id="subtrack"
+              required
               value={subtrack}
               disabled={availableSubtracks.length === 0}
               onChange={(e) => {
@@ -544,6 +666,7 @@ export default function Submission() {
               id="github"
               type="url"
               value={github}
+              required
               onChange={(e) => setGithub(e.target.value)}
               placeholder="ENTER YOUR GITHUB LINK"
               className="
